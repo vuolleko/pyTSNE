@@ -5,6 +5,8 @@ Henri Vuollekoski, 2015
 """
 
 import data
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from sklearn import datasets
@@ -32,9 +34,11 @@ labels_train = digits.target
 
 print("Done. Time elapsed {:.2f} s".format(time() - time0))
 
-vis = tsne.TSNE(max_iter=500)
-vis.fit(images_train)
+anim = True
+vis = tsne.TSNE(max_iter=50)
+vis.fit(images_train, animate=anim, labels=labels_train, anim_file="tsne_movie.mp4")
 
-fig, ax = plt.subplots()
-vis.plot_embedding2D(labels_train, ax)
-plt.show()
+if not anim:
+    fig, ax = plt.subplots()
+    vis.plot_embedding2D(labels_train, ax)
+    plt.show()

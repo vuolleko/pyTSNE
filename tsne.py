@@ -9,6 +9,7 @@ Henri Vuollekoski, 2015
 
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.animation as anim
 
 from time import time
 
@@ -46,9 +47,10 @@ class TSNE(object):
         self.perplex_tol = perplex_tol
         self.perplex_evals_max = perplex_evals_max
 
-    def fit(self, data, animate=False):
+    def fit(self, data, animate=False, labels=None, anim_file="tsne_movie.mp4"):
         """
         Apply the t-SNE.
+        If animate=True, labels must be provided.
         """
         self.data = data  # high-dimensional input data
         self.n_samples = data.shape[0]
@@ -75,9 +77,17 @@ class TSNE(object):
 
         print("Done. Time elapsed {:.2f} s".format(time() - time0))
 
-        self._iterate()
+        if animate and labels is not None:
+            print("Recording animation.")
+            writer = anim.writers['ffmpeg'](fps=10)
+            fig, ax = plt.subplots()
+            markers = self.plot_embedding2D(labels, ax)
 
+            with writer.saving(fig, anim_file, 160):
+                self._iterate(markers=markers, writer=writer)
 
+        else:
+            self._iterate()
 
     def _set_affin_hd(self):
         """
@@ -161,9 +171,7 @@ class TSNE(object):
                         * (self.coord - self.coord[:, np.newaxis])
                                     , axis=1)
 
-
-
-    def _iterate(self):
+    def _iterate(self, markers=None, writer=None):
         print("Iterating t-SNE...")
 
         coord_old = np.zeros_like(self.coord)
@@ -184,24 +192,48 @@ class TSNE(object):
             self.coord += self.learning_rate * self.gradient \
                           + self.momentum * coord_diff
 
+            if writer:
+                print("Animating iteration {}".format(ii))
+                data = self._get_normalized_coords()
+                for jj, text_artist in enumerate(markers):
+                    text_artist.set_x(data[jj, 0])
+                    text_artist.set_y(data[jj, 1])
+                writer.grab_frame()
+
             norm_grad2 = np.sum (self.gradient**2.)
             ii += 1
 
     def plot_embedding2D(self, labels, ax):
         """
-        Plot the 2D data.
+        Plot the 2D data with labels.
+        """
+        n_class = 1. * len(np.unique(labels))
+
+        markers = []  # list to hold text artists
+        data = self._get_normalized_coords()
+
+        # plot a number colored according to label
+        for ii in xrange(self.n_samples):
+            text_artist = ax.text(data[ii, 0], data[ii, 1], str(labels[ii]),
+                          color=plt.cm.Set1(labels[ii] / n_class),
+                          fontdict={'weight': 'bold', 'size': 12})
+            markers.append(text_artist)
+
+        ax.set_xticks([])
+        ax.set_yticks([])
+        # ax.set_xlim([-10, 10])
+        # ax.set_ylim([-10, 10])
+        # ax.set_xlim([data[:,0].min(), data[:,0].max()])
+        # ax.set_ylim([data[:,1].min(), data[:,1].max()])
+
+        return markers
+
+    def _get_normalized_coords(self):
+        """
+        Return normalized coordinates for plotting.
         """
         data = self.coord.copy()
-
-        # normalize data to [0,1]
         data_min = np.min(data, axis=0)
         data_max = np.max(data, axis=0)
         data = (data - data_min) / (data_max - data_min)
-
-        # plot a number colored according to label
-        for ii in xrange(data.shape[0]):
-            ax.text(data[ii, 0], data[ii, 1], str(labels[ii]),
-                color=plt.cm.Set1(labels[ii] / 10.),
-                fontdict={'weight': 'bold', 'size': 12})
-        ax.set_xticks([])
-        ax.set_yticks([])
+        return data
