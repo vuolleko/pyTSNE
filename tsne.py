@@ -21,7 +21,8 @@ class TSNE(object):
 
     def __init__(self, n_components=2, max_iter=10000, learning_rate=1000.,
         momentum=0.3, early_exaggeration=4., n_early=100, init_method='pca',
-        perplexity=30, perplex_tol=1e-4, perplex_evals_max=50):
+        perplexity=30, perplex_tol=1e-4, perplex_evals_max=50,
+        min_grad_norm2=1e-14, cost_min_since_max=30):
         """
         Set initial parameters for t-SNE.
         Input:
@@ -35,6 +36,8 @@ class TSNE(object):
         - perplexity: entropy requirement for bandwidth
         - perplex_tol: tolerance for error in evaluated entropy
         - perplex_evals_max: max number of tries for ok bandwidth
+        - min_grad_norm2: abort if squared norm of gradient below this
+        - cost_min_since_max: abort if no progress these iterations
         """
         self.n_components = n_components
         self.max_iter = max_iter
@@ -46,10 +49,12 @@ class TSNE(object):
         self.perplexity = perplexity
         self.perplex_tol = perplex_tol
         self.perplex_evals_max = perplex_evals_max
+        self.min_grad_norm2 = min_grad_norm2
+        self.cost_min_since_max = cost_min_since_max
 
     def fit(self, data, animate=False, labels=None, anim_file="tsne_movie.mp4"):
         """
-        Apply the t-SNE.
+        Apply the t-SNE to input data.
         If animate=True, labels must be provided.
         """
         self.data = data  # high-dimensional input data
@@ -131,7 +136,8 @@ class TSNE(object):
 
                 evals += 1
 
-        affin.flat[::self.n_samples+1] = 0.  # set p_ii = 0
+        affin.flat[::self.n_samples+1] = 1.e-12  # set p_ii ~= 0
+        affin = np.where(affin < 1.e-12, 1.e-12, affin)
         affin = (affin + affin.T) / (2. * self.n_samples)  # make symmetric
 
         self.affin_hd = affin
@@ -163,34 +169,63 @@ class TSNE(object):
         dist2 = np.sum( (self.coord - self.coord[:, np.newaxis])**2., axis=2)
 
         student = 1. / (1. + dist2)
-        student.flat[::self.n_samples+1] = 0.  # set q_ii = 0
-        affin_ld = student / np.sum ( student )
+        student.flat[::self.n_samples+1] = 1.e-12  # set q_ii ~= 0
+        student = np.where(student < 1.e-12, 1.e-12, student)
+        self.affin_ld = student / np.sum ( student )
 
         self.gradient = 4. * np.sum(
-                        ( (self.affin_hd - affin_ld) * student )[:, :, np.newaxis]
+                        ( (self.affin_hd - self.affin_ld) * student )[:, :, np.newaxis]
                         * (self.coord - self.coord[:, np.newaxis])
                                     , axis=1)
 
     def _iterate(self, markers=None, writer=None):
+        """
+        Iterate using gradient descent.
+        """
         print("Iterating t-SNE...")
 
-        coord_old = np.zeros_like(self.coord)
+        coord_diff = np.zeros_like(self.coord)
+        stepsize = np.ones_like(self.coord) * self.learning_rate
+
         ii = 0
-        norm_grad2 = 1.
+        grad_norm2 = 1.
+        cost_min = 1e99
+        cost_min_since = 0
+        costP = np.sum(self.affin_hd * np.log(self.affin_hd))
         time0 = time()
-        while ii < self.max_iter and norm_grad2 > 1.e-14:
-            if ii > 0 and ii%50==0:
-                print("{} iterations done. Time elapsed for last 50: {:.2f} s. Gradient norm {:f}.".format(ii, time() - time0, np.sqrt(norm_grad2)))
+        while ii < self.max_iter and grad_norm2 > self.min_grad_norm2:
+            if ii > 0 and ii%10==0:
+                print( "{} iterations done. Time elapsed for last 50: "
+                       "{:.2f} s. Gradient norm {:f}."
+                       .format(ii, time() - time0, np.sqrt(grad_norm2)) )
                 time0 = time()
 
             if ii == self.n_early:
                 self.affin_hd /= self.early_exaggeration  # cease "early exaggeration"
 
             self._set_gradient()
-            coord_diff = self.coord - coord_old
-            coord_old = self.coord.copy()
-            self.coord += self.learning_rate * self.gradient \
-                          + self.momentum * coord_diff
+
+            # abort if no progress for a while
+            cost = costP - np.sum(self.affin_hd * np.log(self.affin_ld))
+            if cost < cost_min:
+                cost_min = cost
+                cost_min_since = 0
+            else:
+                cost_min_since += 1
+                if cost_min_since > self.cost_min_since_max:
+                    print( "No progress for {} iterations. Aborting."
+                           .format(cost_min_since) )
+                    break
+
+            # Decrease stepsize if previous step and current gradient in the same direction.
+            # Otherwise increase stepsize (note the negative definition of gradient here).
+            stepsize = np.where((self.gradient>0) == (coord_diff>0),
+                             np.maximum(stepsize * 0.8, 0.01 * self.learning_rate),
+                             stepsize + 0.2 * self.learning_rate)
+
+            coord_diff = self.learning_rate * self.gradient \
+                         + self.momentum * coord_diff
+            self.coord += coord_diff
 
             if writer:
                 print("Animating iteration {}".format(ii))
@@ -200,7 +235,7 @@ class TSNE(object):
                     text_artist.set_y(data[jj, 1])
                 writer.grab_frame()
 
-            norm_grad2 = np.sum (self.gradient**2.)
+            grad_norm2 = np.sum (self.gradient**2.)
             ii += 1
 
     def plot_embedding2D(self, labels, ax):

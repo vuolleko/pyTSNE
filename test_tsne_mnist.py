@@ -4,14 +4,10 @@ Apply t-Distributed Stochastic Neighbor Embedding to MNIST digits.
 Henri Vuollekoski, 2015
 """
 
-import data
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
 from sklearn import datasets
 from time import time
 
+import data
 import tsne
 
 
@@ -34,8 +30,14 @@ labels_train = digits.target
 
 print("Done. Time elapsed {:.2f} s".format(time() - time0))
 
-anim = True
-vis = tsne.TSNE(max_iter=50)
+anim = False
+
+if anim:
+    import matplotlib
+    matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+vis = tsne.TSNE(max_iter=100, momentum=0.5)
 vis.fit(images_train, animate=anim, labels=labels_train, anim_file="tsne_movie.mp4")
 
 if not anim:
