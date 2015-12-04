@@ -19,9 +19,9 @@ class TSNE(object):
     Implements basic t-Distributed Stochastic Neighbor Embedding.
     """
 
-    def __init__(self, n_components=2, max_iter=10000, learning_rate=1000.,
-        momentum=0.3, early_exaggeration=4., n_early=100, init_method='pca',
-        perplexity=30, perplex_tol=1e-4, perplex_evals_max=50,
+    def __init__(self, n_components=2, max_iter=1000, learning_rate=200.,
+        momentum=0.5, momentum_final=0.8, early_exaggeration=4., n_early=250,
+        init_method='pca', perplexity=50, perplex_tol=1e-4, perplex_evals_max=50,
         min_grad_norm2=1e-14, cost_min_since_max=30):
         """
         Set initial parameters for t-SNE.
@@ -30,8 +30,9 @@ class TSNE(object):
         - max_iter: max number of iterations
         - learning_rate: for gradient descent
         - momentum: for gradient descent
+        - momentum_final: momentum after n_early iterations
         - early exaggeration: factor for affinities in high dimension
-        - n_early: apply the previous until this
+        - n_early: apply the above until this
         - init_method: initialization method 'pca' or 'rnorm'
         - perplexity: entropy requirement for bandwidth
         - perplex_tol: tolerance for error in evaluated entropy
@@ -43,6 +44,7 @@ class TSNE(object):
         self.max_iter = max_iter
         self.learning_rate = learning_rate
         self.momentum = momentum
+        self.momentum_final = momentum_final
         self.early_exaggeration = early_exaggeration
         self.n_early = n_early
         self.init_method = init_method
@@ -187,6 +189,7 @@ class TSNE(object):
         coord_diff = np.zeros_like(self.coord)
         stepsize = np.ones_like(self.coord) * self.learning_rate
 
+        print_period = 10
         ii = 0
         grad_norm2 = 1.
         cost_min = 1e99
@@ -194,13 +197,14 @@ class TSNE(object):
         costP = np.sum(self.affin_hd * np.log(self.affin_hd))
         time0 = time()
         while ii < self.max_iter and grad_norm2 > self.min_grad_norm2:
-            if ii > 0 and ii%10==0:
-                print( "{} iterations done. Time elapsed for last 50: "
+            if ii > 0 and ii%print_period==0:
+                print( "{} iterations done. Time elapsed for last {}: "
                        "{:.2f} s. Gradient norm {:f}."
-                       .format(ii, time() - time0, np.sqrt(grad_norm2)) )
+                       .format(ii, print_period, time() - time0, np.sqrt(grad_norm2)) )
                 time0 = time()
 
             if ii == self.n_early:
+                self.momentum = self.momentum_final
                 self.affin_hd /= self.early_exaggeration  # cease "early exaggeration"
 
             self._set_gradient()
