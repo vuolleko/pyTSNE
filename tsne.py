@@ -84,6 +84,7 @@ class TSNE(object):
 
         print("Done. Time elapsed {:.2f} s".format(time() - time0))
 
+        # animate
         if animate and labels is not None:
             print("Recording animation.")
             writer = anim.writers['ffmpeg'](fps=10)
@@ -93,6 +94,7 @@ class TSNE(object):
             with writer.saving(fig, anim_file, 160):
                 self._iterate(markers=markers, writer=writer)
 
+        # don't animate
         else:
             self._iterate()
 
@@ -108,7 +110,7 @@ class TSNE(object):
         for ii in xrange(self.n_samples):
             # print ii
             # all squared distances from ii
-            dist2 = np.sum( (self.data - self.data[ii])**2., axis=1)
+            dist2 = np.sum( (self.data - self.data[ii])**2., axis=1 )
 
             s_min = 0.
             s_max = 1.e15
@@ -124,8 +126,8 @@ class TSNE(object):
 
                 # Shannon entropy = log2(perplexity)
                 shannon = -np.sum( np.where(affin[ii, :] > 0.,
-                          affin[ii, :] * np.log2(affin[ii, :])
-                                  , 0.) )
+                                            affin[ii, :] * np.log2(affin[ii, :])
+                                            , 0.) )
                 error = shannon - log_perplexity
 
                 # P and Shannon entropy increase as sigma increases
@@ -173,7 +175,7 @@ class TSNE(object):
         student = 1. / (1. + dist2)
         student.flat[::self.n_samples+1] = 1.e-12  # set q_ii ~= 0
         student = np.where(student < 1.e-12, 1.e-12, student)
-        self.affin_ld = student / np.sum ( student )
+        self.affin_ld = student / np.sum( student )
 
         self.gradient = 4. * np.sum(
                         ( (self.affin_hd - self.affin_ld) * student )[:, :, np.newaxis]
@@ -210,7 +212,7 @@ class TSNE(object):
             self._set_gradient()
 
             # abort if no progress for a while
-            cost = costP - np.sum(self.affin_hd * np.log(self.affin_ld))
+            cost = costP - np.sum( self.affin_hd * np.log(self.affin_ld) )
             if cost < cost_min:
                 cost_min = cost
                 cost_min_since = 0
@@ -223,18 +225,19 @@ class TSNE(object):
 
             # Decrease stepsize if previous step and current gradient in the same direction.
             # Otherwise increase stepsize (note the negative definition of gradient here).
-            stepsize = np.where((self.gradient>0) == (coord_diff>0),
-                             np.maximum(stepsize * 0.8, 0.01 * self.learning_rate),
-                             stepsize + 0.2 * self.learning_rate)
+            stepsize = np.where( (self.gradient > 0) == (coord_diff > 0),
+                                np.maximum(stepsize * 0.8, 0.01 * self.learning_rate),
+                                stepsize + 0.2 * self.learning_rate)
 
             coord_diff = self.learning_rate * self.gradient \
                          + self.momentum * coord_diff
             self.coord += coord_diff
 
+            # update animation
             if writer:
                 print("Animating iteration {}".format(ii))
                 data = self._get_normalized_coords()
-                for jj, text_artist in enumerate(markers):
+                for jj, text_artist in enumerate(markers):  # SLOW!
                     text_artist.set_x(data[jj, 0])
                     text_artist.set_y(data[jj, 1])
                 writer.grab_frame()
@@ -254,8 +257,8 @@ class TSNE(object):
         # plot a number colored according to label
         for ii in xrange(self.n_samples):
             text_artist = ax.text(data[ii, 0], data[ii, 1], str(labels[ii]),
-                          color=plt.cm.Set1(labels[ii] / n_class),
-                          fontdict={'weight': 'bold', 'size': 12})
+                                  color=plt.cm.Set1(labels[ii] / n_class),
+                                  fontdict={'weight': 'bold', 'size': 12})
             markers.append(text_artist)
 
         ax.set_xticks([])
