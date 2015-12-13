@@ -76,7 +76,8 @@ class TSNE(object):
         time0 = time()
         if self.init_method == 'pca':
             print("Calculating PCA as initial guess...")
-            self.coord = self._get_pca2()
+            self.coord = get_pca_fit(data, self.n_components)
+            # self.coord = self._get_normalized_coords()
 
         elif self.init_method == 'rnorm':
             print("Sampling initial distribution...")
@@ -102,43 +103,19 @@ class TSNE(object):
         """
         Calculate pairwise affinities in high dimensional data.
         """
-        affin = np.empty((self.n_samples, self.n_samples))
-        log_perplexity = np.log2(self.perplexity)
-        sigma22 = 1.e5  # initial guess for 2*sigma^2
+        affin = np.zeros((self.n_samples, self.n_samples))
 
         # calculate conditional probabilities
         for ii in xrange(self.n_samples):
-            # print ii
             # all squared distances from ii
             dist2 = np.sum( (self.data - self.data[ii])**2., axis=1 )
 
-            s_min = 0.
-            s_max = 1.e15
-            error = self.perplex_tol + 1.  # just set big enough
-            evals = 0
+            affin[ii, :] = self._affin_bin_search_sigma(dist2)
 
-            # use binary search for sigma to get to desired perplexity
-            while abs(error) > self.perplex_tol and evals < self.perplex_evals_max:
-
-                # calculate affinities for current sigma
-                denom = np.sum( np.exp( -dist2 / sigma22 ) ) - 1.
-                affin[ii, :] = np.exp( -dist2 / sigma22 ) / denom
-
-                # Shannon entropy = log2(perplexity)
-                shannon = -np.sum( np.where(affin[ii, :] > 0.,
-                                            affin[ii, :] * np.log2(affin[ii, :])
-                                            , 0.) )
-                error = shannon - log_perplexity
-
-                # P and Shannon entropy increase as sigma increases
-                if error > 0:  # -> sigma too large
-                    s_max = sigma22
-                    sigma22 = (sigma22 + s_min) / 2.
-                else:  # -> sigma too small
-                    s_min = sigma22
-                    sigma22 = (sigma22 + s_max) / 2.
-
-                evals += 1
+            # TODO optimize
+            # dist2 = np.sum( (self.data[ii+1:] - self.data[ii])**2., axis=1 )
+            # affin[ii, ii+1:] = self._affin_bin_search_sigma(dist2)
+            # affin[ii, :ii+1] = affin[:ii+1, ii]
 
         affin.flat[::self.n_samples+1] = 1.e-12  # set p_ii ~= 0
         affin = np.where(affin < 1.e-12, 1.e-12, affin)
@@ -146,20 +123,43 @@ class TSNE(object):
 
         self.affin_hd = affin
 
-
-    def _get_pca2(self):
+    def _affin_bin_search_sigma(self, dist2):
         """
-        Return the first principal components.
+        Binary search for sigma to get to desired perplexity.
+        Return affinity.
         """
-        # contruct covariance matrix
-        covmat = np.cov(self.data, rowvar=True)
-        # get eigenvalues and eigenvectors
-        eigval, eigvec = np.linalg.eigh(covmat)
-        # sort eigenvectors (ascending) and pick two highest
-        ind2 = np.argsort(eigval)[-self.n_components:]
+        log_perplexity = np.log2(self.perplexity)
+        s_min = 0.
+        s_max = 1.e15
+        error = self.perplex_tol + 1.  # just set big enough
+        evals = 0
+        sigma22 = 1.e5  # initial guess for 2*sigma^2
 
-        return eigvec[:, ind2]
+        while abs(error) > self.perplex_tol and evals < self.perplex_evals_max:
 
+            # calculate affinities for current sigma
+            denom = np.sum( np.exp( -dist2[dist2>0.] / sigma22 ) )
+            # if dist2.shape[0] == self.n_samples:
+            #     denom -= 1.  # remove contribution from self
+            affin = np.exp( -dist2 / sigma22 ) / denom
+
+            # Shannon entropy = log2(perplexity)
+            shannon = -np.sum( np.where(affin > 0.,
+                                        affin * np.log2(affin.clip(min=1e-12))
+                                        , 0.) )
+            error = shannon - log_perplexity
+
+            # P and Shannon entropy increase as sigma increases
+            if error > 0:  # -> sigma too large
+                s_max = sigma22
+                sigma22 = (sigma22 + s_min) / 2.
+            else:  # -> sigma too small
+                s_min = sigma22
+                sigma22 = (sigma22 + s_max) / 2.
+
+            evals += 1
+
+        return affin
 
     def _set_gradient(self):
         """
@@ -178,7 +178,7 @@ class TSNE(object):
         self.affin_ld = student / np.sum( student )
 
         self.gradient = 4. * np.sum(
-                        ( (self.affin_hd - self.affin_ld) * student )[:, :, np.newaxis]
+                ( (self.affin_hd - self.affin_ld) * student )[:, :, np.newaxis]
                         * (self.coord - self.coord[:, np.newaxis])
                                     , axis=1)
 
@@ -194,9 +194,12 @@ class TSNE(object):
         print_period = 10
         ii = 0
         grad_norm2 = 1.
-        cost_min = 1e99
-        cost_min_since = 0
-        costP = np.sum(self.affin_hd * np.log(self.affin_hd))
+
+        if self.cost_min_since_max > 0:
+            cost_min = 1e99
+            cost_min_since = 0
+            costP = np.sum( self.affin_hd * np.log(self.affin_hd.clip(min=1e-12)) )
+
         time0 = time()
         while ii < self.max_iter and grad_norm2 > self.min_grad_norm2:
             if ii > 0 and ii%print_period==0:
@@ -211,17 +214,18 @@ class TSNE(object):
 
             self._set_gradient()
 
-            # abort if no progress for a while
-            cost = costP - np.sum( self.affin_hd * np.log(self.affin_ld) )
-            if cost < cost_min:
-                cost_min = cost
-                cost_min_since = 0
-            else:
-                cost_min_since += 1
-                if cost_min_since > self.cost_min_since_max:
-                    print( "No progress for {} iterations. Aborting."
-                           .format(cost_min_since) )
-                    break
+            if ii > self.n_early and self.cost_min_since_max > 0:
+                # abort if no progress for a while
+                cost = costP - np.sum( self.affin_hd * np.log(self.affin_ld) )
+                if cost < cost_min:
+                    cost_min = cost
+                    cost_min_since = 0
+                else:
+                    cost_min_since += 1
+                    if cost_min_since > self.cost_min_since_max:
+                        print( "No progress in {} iterations. Aborting."
+                               .format(cost_min_since) )
+                        break
 
             # Decrease stepsize if previous step and current gradient in the same direction.
             # Otherwise increase stepsize (note the negative definition of gradient here).
@@ -279,3 +283,19 @@ class TSNE(object):
         data_max = np.max(data, axis=0)
         data = (data - data_min) / (data_max - data_min)
         return data
+
+
+def get_pca_fit(data, n_components):
+    """
+    Return the data projected on its first principal components.
+    """
+    # contruct covariance matrix
+    covmat = np.cov(data, rowvar=False)
+    # get eigenvalues and eigenvectors
+    eigval, eigvec = np.linalg.eigh(covmat)
+    # sort eigenvectors (ascending) and pick some of the highest
+    inds = np.argsort(eigval)[-n_components:]
+    # project data
+    proj = data.dot(eigvec[:, inds])
+
+    return proj
