@@ -19,10 +19,10 @@ class TSNE(object):
     Implements basic t-Distributed Stochastic Neighbor Embedding.
     """
 
-    def __init__(self, n_components=2, max_iter=1000, learning_rate=200.,
-        momentum=0.5, momentum_final=0.8, early_exaggeration=4., n_early=250,
-        init_method='pca', perplexity=50, perplex_tol=1e-4, perplex_evals_max=50,
-        min_grad_norm2=1e-14, cost_min_since_max=30):
+    def __init__(self, n_components=2, max_iter=1000, learning_rate=500.,
+        momentum=0.5, momentum_final=0.8, n_momentum=250, early_exaggeration=4.,
+        n_early_exag=100, init_method='pca', perplexity=30, perplex_tol=1e-4,
+        perplex_evals_max=50, min_grad_norm2=1e-14, cost_min_since_max=30):
         """
         Set initial parameters for t-SNE.
         Input:
@@ -30,9 +30,10 @@ class TSNE(object):
         - max_iter: max number of iterations
         - learning_rate: for gradient descent
         - momentum: for gradient descent
-        - momentum_final: momentum after n_early iterations
+        - momentum_final: momentum after n_momentum iterations
+        - n_momentum: change momentum to final after this
         - early exaggeration: factor for affinities in high dimension
-        - n_early: apply the above until this
+        - n_early_exag: apply the above until this
         - init_method: initialization method 'pca' or 'rnorm'
         - perplexity: entropy requirement for bandwidth
         - perplex_tol: tolerance for error in evaluated entropy
@@ -45,8 +46,9 @@ class TSNE(object):
         self.learning_rate = learning_rate
         self.momentum = momentum
         self.momentum_final = momentum_final
+        self.n_momentum = n_momentum
         self.early_exaggeration = early_exaggeration
-        self.n_early = n_early
+        self.n_early_exag = n_early_exag
         self.init_method = init_method
         self.perplexity = perplexity
         self.perplex_tol = perplex_tol
@@ -76,8 +78,7 @@ class TSNE(object):
         time0 = time()
         if self.init_method == 'pca':
             print("Calculating PCA as initial guess...")
-            self.coord = get_pca_fit(data, self.n_components)
-            # self.coord = self._get_normalized_coords()
+            self.coord = get_pca_proj(data, self.n_components)
 
         elif self.init_method == 'rnorm':
             print("Sampling initial distribution...")
@@ -208,13 +209,15 @@ class TSNE(object):
                        .format(ii, print_period, time() - time0, np.sqrt(grad_norm2)) )
                 time0 = time()
 
-            if ii == self.n_early:
-                self.momentum = self.momentum_final
+            if ii == self.n_early_exag:
                 self.affin_hd /= self.early_exaggeration  # cease "early exaggeration"
+
+            if ii == self.n_momentum:
+                self.momentum = self.momentum_final
 
             self._set_gradient()
 
-            if ii > self.n_early and self.cost_min_since_max > 0:
+            if ii > self.n_early_exag and self.cost_min_since_max > 0:
                 # abort if no progress for a while
                 cost = costP - np.sum( self.affin_hd * np.log(self.affin_ld) )
                 if cost < cost_min:
@@ -240,7 +243,7 @@ class TSNE(object):
             # update animation
             if writer:
                 print("Animating iteration {}".format(ii))
-                data = self._get_normalized_coords()
+                data = normalize(self.coord)
                 for jj, text_artist in enumerate(markers):  # SLOW!
                     text_artist.set_x(data[jj, 0])
                     text_artist.set_y(data[jj, 1])
@@ -256,7 +259,7 @@ class TSNE(object):
         n_class = 1. * len(np.unique(labels))
 
         markers = []  # list to hold text artists
-        data = self._get_normalized_coords()
+        data = normalize(self.coord)
 
         # plot a number colored according to label
         for ii in xrange(self.n_samples):
@@ -267,25 +270,22 @@ class TSNE(object):
 
         ax.set_xticks([])
         ax.set_yticks([])
-        # ax.set_xlim([-10, 10])
-        # ax.set_ylim([-10, 10])
-        # ax.set_xlim([data[:,0].min(), data[:,0].max()])
-        # ax.set_ylim([data[:,1].min(), data[:,1].max()])
+        ax.set_xlim([-0.05, 1.05])
+        ax.set_ylim([-0.05, 1.05])
 
         return markers
 
-    def _get_normalized_coords(self):
-        """
-        Return normalized coordinates for plotting.
-        """
-        data = self.coord.copy()
-        data_min = np.min(data, axis=0)
-        data_max = np.max(data, axis=0)
-        data = (data - data_min) / (data_max - data_min)
-        return data
+def normalize(data):
+    """
+    Return data normalized to [0,1].
+    """
+    data_min = np.min(data, axis=0)
+    data_max = np.max(data, axis=0)
+    data = (data - data_min) / (data_max - data_min)
+    return data
 
 
-def get_pca_fit(data, n_components):
+def get_pca_proj(data, n_components):
     """
     Return the data projected on its first principal components.
     """
@@ -295,7 +295,7 @@ def get_pca_fit(data, n_components):
     eigval, eigvec = np.linalg.eigh(covmat)
     # sort eigenvectors (ascending) and pick some of the highest
     inds = np.argsort(eigval)[-n_components:]
-    # project data
+    # project data on first components
     proj = data.dot(eigvec[:, inds])
 
     return proj
